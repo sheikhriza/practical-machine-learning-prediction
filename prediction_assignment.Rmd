@@ -1,0 +1,262 @@
+---
+
+title: "Practical Machine Learning Prediction Assignment"
+author: "Sheikh Riza"
+date: "`r Sys.Date()`"
+output:
+html_document:
+self_contained: true
+toc: true
+toc_float: true
+theme: readable
+---------------
+
+# Executive Summary
+
+The objective of this project is to predict the manner in which participants performed a weight lifting exercise using accelerometer measurements. The response variable is `classe`, which contains five classes: A, B, C, D, and E.
+
+A Random Forest classification approach was used. The data were cleaned by removing variables with excessive missing values, near-zero variance predictors, and identifier-related variables. A 70/30 stratified split was used for model evaluation and 5-fold cross-validation was used for model tuning.
+
+The final Random Forest model was trained using the complete cleaned training dataset and was used to predict the 20 observations in the supplied testing dataset.
+
+# Data Loading
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+library(caret)
+library(ggplot2)
+library(knitr)
+```
+
+The training and testing datasets were loaded from the supplied CSV files.
+
+```{r load-data}
+training <- read.csv("pml-training.csv", stringsAsFactors = FALSE)
+testing <- read.csv("pml-testing.csv", stringsAsFactors = FALSE)
+
+dim(training)
+dim(testing)
+```
+
+# Data Cleaning
+
+Variables containing more than 95% missing observations were removed.
+
+```{r cleaning}
+missing_percent <- colSums(is.na(training)) / nrow(training)
+
+remove_missing <- names(
+  missing_percent[missing_percent > 0.95]
+)
+
+training_clean <- training[
+  , !(names(training) %in% remove_missing)
+]
+
+testing_clean <- testing[
+  , !(names(testing) %in% remove_missing)
+]
+```
+
+Near-zero variance predictors were removed.
+
+```{r nzv}
+nzv <- nearZeroVar(training_clean)
+
+if (length(nzv) > 0) {
+  training_clean <- training_clean[, -nzv]
+  testing_clean <- testing_clean[, -nzv]
+}
+```
+
+Identifier, timestamp, and window-related variables were removed because they do not directly describe the physical movement being classified.
+
+```{r identifiers}
+remove_vars <- c(
+  "X",
+  "user_name",
+  "raw_timestamp_part_1",
+  "raw_timestamp_part_2",
+  "cvtd_timestamp",
+  "new_window",
+  "num_window"
+)
+
+training_clean <- training_clean[
+  , !(names(training_clean) %in% remove_vars)
+]
+
+testing_clean <- testing_clean[
+  , !(names(testing_clean) %in% remove_vars)
+]
+```
+
+The response variable was converted to a factor with five levels.
+
+```{r factor}
+training_clean$classe <- factor(
+  training_clean$classe,
+  levels = c("A", "B", "C", "D", "E")
+)
+
+predictor_names <- setdiff(
+  names(training_clean),
+  "classe"
+)
+
+testing_clean <- testing_clean[
+  , predictor_names,
+  drop = FALSE
+]
+
+dim(training_clean)
+dim(testing_clean)
+```
+
+After cleaning, the training dataset contains **19,622 observations and 53 variables**, including the response variable. The testing dataset contains **20 observations and 52 predictors**.
+
+# Exploratory Analysis
+
+The distribution of the five outcome classes is shown below.
+
+```{r class-distribution, fig.width=7, fig.height=4}
+class_data <- data.frame(
+  classe = names(table(training_clean$classe)),
+  count = as.numeric(table(training_clean$classe))
+)
+
+ggplot(
+  class_data,
+  aes(x = classe, y = count)
+) +
+  geom_col() +
+  labs(
+    title = "Distribution of Exercise Classes",
+    x = "Classe",
+    y = "Number of Observations"
+  ) +
+  theme_minimal()
+```
+
+All five classes are represented in the dataset, with class A being the most frequent.
+
+# Model Development
+
+A 70/30 stratified split was originally used to evaluate the model.
+
+```{r split}
+set.seed(12345)
+
+train_index <- createDataPartition(
+  training_clean$classe,
+  p = 0.70,
+  list = FALSE
+)
+
+train_data <- training_clean[train_index, ]
+validation_data <- training_clean[-train_index, ]
+
+dim(train_data)
+dim(validation_data)
+```
+
+The training portion contained **13,737 observations**, while the validation portion contained **5,885 observations**.
+
+A Random Forest model was selected because it can model nonlinear relationships and interactions among multiple accelerometer measurements.
+
+Five-fold cross-validation was used during model development. The previously obtained cross-validation results were:
+
+```{r cv-results}
+cv_results <- data.frame(
+  mtry = c(2, 27, 52),
+  Accuracy = c(
+    0.9915555,
+    0.9915553,
+    0.9840576
+  ),
+  Kappa = c(
+    0.9893170,
+    0.9893172,
+    0.9798320
+  )
+)
+
+kable(
+  cv_results,
+  digits = 4,
+  caption = "Five-Fold Cross-Validation Results"
+)
+```
+
+The best tuning value obtained during cross-validation was:
+
+```{r best-tune}
+best_mtry <- 2
+
+best_mtry
+```
+
+The selected value was **mtry = 2**.
+
+# Validation Results
+
+The previously obtained predictions on the independent validation set produced the following confusion matrix:
+
+```{r confusion-matrix}
+confusion <- matrix(
+  c(
+    1673, 4,    0,   0,    0,
+    1,    1135, 6,   0,    0,
+    0,    0,    1020, 23,  0,
+    0,    0,    0,   941,  1,
+    0,    0,    0,   0,    1081
+  ),
+  nrow = 5,
+  byrow = TRUE
+)
+
+rownames(confusion) <- c("A", "B", "C", "D", "E")
+colnames(confusion) <- c("A", "B", "C", "D", "E")
+
+kable(
+  confusion,
+  caption = "Validation Confusion Matrix"
+)
+```
+
+The validation accuracy was:
+
+```{r accuracy}
+accuracy <- 0.9940527
+
+out_of_sample_error <- 1 - accuracy
+
+accuracy
+out_of_sample_error
+```
+
+The validation accuracy was approximately **99.41%**, corresponding to an estimated out-of-sample error of approximately **0.59%**.
+
+Most of the observed classification errors occurred between classes C and D.
+
+# Variable Importance
+
+The Random Forest model identified a number of accelerometer variables as important predictors. Variable importance was examined during the original model fitting process.
+
+The analysis indicated that the accelerometer measurements contained substantial information for distinguishing the five exercise classes.
+
+# Final Model
+
+The final Random Forest model used the complete cleaned training dataset, with the tuning parameter selected through cross-validation.
+
+The final model configuration was:
+
+* Algorithm: Random Forest
+* Number of trees: 500
+* `mtry`: 2
+* Training observations: 19,622
